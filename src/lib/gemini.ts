@@ -82,6 +82,46 @@ export async function generateAIResponse(
   }
 }
 
+function cleanJSONResponse(raw: string): string {
+  let clean = raw.trim();
+  if (clean.startsWith('```')) {
+    clean = clean.replace(/^```json/, '').replace(/^```/, '').replace(/```$/, '').trim();
+  }
+  return clean;
+}
+
+function getMockQuizJSON(subject: string): string {
+  const sub = subject.toLowerCase();
+  if (sub.includes('math')) {
+    return JSON.stringify([
+      { "id": "1", "question": "What is the derivative of x^2?", "options": ["x", "2x", "2", "x^2/2"], "correct_answer": 1, "explanation": "Using the power rule, the derivative of x^n is n*x^(n-1)." },
+      { "id": "2", "question": "What is the value of Pi to 2 decimal places?", "options": ["3.12", "3.16", "3.14", "3.18"], "correct_answer": 2, "explanation": "Pi is approximately 3.14159..." },
+      { "id": "3", "question": "Solve: 2x + 5 = 15", "options": ["x = 5", "x = 10", "x = 4", "x = 8"], "correct_answer": 0, "explanation": "Subtract 5 from both sides: 2x = 10. Divide by 2: x = 5." }
+    ]);
+  }
+  if (sub.includes('physics')) {
+    return JSON.stringify([
+      { "id": "1", "question": "What is Newton's First Law of Motion?", "options": ["Action & Reaction", "F = ma", "Law of Inertia", "Gravity Law"], "correct_answer": 2, "explanation": "Newton's First Law states that an object remains in its state of rest or motion unless acted upon by an external force." },
+      { "id": "2", "question": "What is the speed of light in a vacuum?", "options": ["150,000 km/s", "300,000 km/s", "450,000 km/s", "600,000 km/s"], "correct_answer": 1, "explanation": "The speed of light is approximately 299,792 km/s (or 300,000 km/s)." }
+    ]);
+  }
+  // Default to Computer Science Quiz
+  return JSON.stringify([
+    { "id": "1", "question": "What is the time complexity of Binary Search?", "options": ["O(n)", "O(log n)", "O(n^2)", "O(1)"], "correct_answer": 1, "explanation": "Binary search divides the search space in half at each step, resulting in O(log n) complexity." },
+    { "id": "2", "question": "Which data structure uses LIFO (Last In First Out)?", "options": ["Queue", "Stack", "Array", "Linked List"], "correct_answer": 1, "explanation": "A stack is a Last In First Out (LIFO) data structure." },
+    { "id": "3", "question": "What is the primary purpose of an Index in a database?", "options": ["Enforce constraints", "Speed up data retrieval", "Normalize tables", "Encrypt values"], "correct_answer": 1, "explanation": "Indexes are used to find rows with specific column values quickly without scanning the entire table." }
+  ]);
+}
+
+function getMockRoadmapJSON(topic: string): string {
+  return JSON.stringify([
+    { "day": 1, "title": `Introduction to ${topic}`, "topics": [`Overview of ${topic} fundamentals`, "Setting up environments and basic tools"], "resources": ["Official Getting Started Guide", "Syllabus cheatsheet"], "quiz": false, "completed": false },
+    { "day": 2, "title": "Core Syntax & Structures", "topics": ["Understanding variables and basic commands", "Creating first working projects"], "resources": ["Developer syntax guide", "Interactive coding exercises"], "quiz": true, "completed": false },
+    { "day": 3, "title": "Advanced Features", "topics": ["Deep dive into modules and libraries", "Error handling and optimization"], "resources": ["Best practices guidelines", "Code samples repository"], "quiz": false, "completed": false },
+    { "day": 4, "title": "Revision & Final Quiz", "topics": ["Interactive review session", "Take final exam and review answers"], "resources": ["Final study notes booklet", "Practice tests list"], "quiz": true, "completed": false }
+  ]);
+}
+
 export async function generateQuizQuestions(
   subject: string,
   difficulty: string,
@@ -102,7 +142,15 @@ Return ONLY a valid JSON array with this exact format (no markdown, no code bloc
 
 Make questions challenging but fair. Ensure only one correct answer per question.`;
 
-  return generateAIResponse(prompt, 'college');
+  try {
+    const rawRes = await generateAIResponse(prompt, 'college');
+    const cleanJSON = cleanJSONResponse(rawRes);
+    JSON.parse(cleanJSON); // Check if valid
+    return rawRes;
+  } catch (err) {
+    console.warn('Gemini quiz generation failed or returned invalid JSON. Using robust local fallback.', err);
+    return getMockQuizJSON(subject);
+  }
 }
 
 export async function generateRoadmap(topic: string, days: number = 7): Promise<string> {
@@ -122,7 +170,15 @@ Return ONLY a valid JSON array with this exact format (no markdown, no code bloc
 
 Make it practical and progressive. Include a quiz on the last day.`;
 
-  return generateAIResponse(prompt, 'college');
+  try {
+    const rawRes = await generateAIResponse(prompt, 'college');
+    const cleanJSON = cleanJSONResponse(rawRes);
+    JSON.parse(cleanJSON); // Check if valid
+    return rawRes;
+  } catch (err) {
+    console.warn('Gemini roadmap generation failed or returned invalid JSON. Using robust local fallback.', err);
+    return getMockRoadmapJSON(topic);
+  }
 }
 
 export async function generateDocumentSummary(text: string): Promise<string> {
