@@ -44,8 +44,8 @@ const SignupPage = () => {
     try {
       await signup(fullName, email, password);
       navigate('/onboarding');
-    } catch {
-      setError('Signup failed. Please try again.');
+    } catch (err: any) {
+      setError(err?.message || 'Signup failed. Please try again.');
     }
   };
 

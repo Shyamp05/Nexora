@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Map,
@@ -14,64 +14,67 @@ import {
 } from 'lucide-react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import type { RoadmapDay } from '@/types';
+import { generateRoadmap as generateAIRoadmap } from '@/lib/gemini';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/stores/authStore';
 
-/* ─── Mock roadmap data ─────────────────────────────────────── */
-const generateRoadmap = (topic: string): { topic: string; days: RoadmapDay[] } => ({
+// Static fallback roadmap in case Gemini is offline or rate-limited
+const getFallbackRoadmap = (topic: string): { topic: string; days: RoadmapDay[] } => ({
   topic,
   days: [
     {
       day: 1,
-      title: 'Introduction to DBMS',
-      topics: ['What is DBMS', 'Types of DBMS', 'DBMS vs File System'],
-      resources: ['DBMS by Navathe Ch.1', 'Gate Smashers YouTube'],
+      title: `Introduction to ${topic}`,
+      topics: [`Core concepts of ${topic}`, `Setting up development environments`, `Basic syntax and structures`],
+      resources: [`Official ${topic} Documentation`, 'Getting Started Guide (YouTube)'],
       quiz: false,
-      completed: true,
+      completed: false,
     },
     {
       day: 2,
-      title: 'ER Model',
-      topics: ['Entities', 'Relationships', 'ER Diagrams'],
-      resources: ['ER Model Tutorial - GeeksforGeeks', 'Practice ER diagrams'],
+      title: 'Foundational Principles',
+      topics: ['Key architecture components', 'Under the hood mechanisms', 'Common pitfalls'],
+      resources: ['Intermediate Concepts Tutorial', 'Hands-on practice examples'],
       quiz: true,
-      completed: true,
+      completed: false,
     },
     {
       day: 3,
-      title: 'Relational Model',
-      topics: ['Keys', 'Constraints', 'Schema'],
-      resources: ['Relational Algebra Notes', 'W3Schools SQL'],
+      title: 'Working with Data',
+      topics: ['Variables and state management', 'Handling inputs/outputs', 'Data manipulation flow'],
+      resources: ['Working with Data Guide', 'Interactive exercises'],
       quiz: false,
       completed: false,
     },
     {
       day: 4,
-      title: 'SQL Basics',
-      topics: ['DDL', 'DML', 'SELECT queries'],
-      resources: ['SQLBolt Interactive', 'LeetCode SQL 50'],
+      title: 'Advanced Features',
+      topics: ['Advanced functions and modules', 'Optimization techniques', 'Performance best practices'],
+      resources: ['Advanced Tutorial Course', 'Speed optimization blog post'],
       quiz: true,
       completed: false,
     },
     {
       day: 5,
-      title: 'Normalization',
-      topics: ['1NF', '2NF', '3NF', 'BCNF'],
-      resources: ['Normalization by Jenny\'s Lectures', 'Practice Problems'],
+      title: 'Integration and Testing',
+      topics: ['External APIs and systems integration', 'Writing unit tests', 'Debugging methods'],
+      resources: ['Testing Framework Basics', 'Debugging Cheat Sheet'],
       quiz: true,
       completed: false,
     },
     {
       day: 6,
-      title: 'Transactions',
-      topics: ['ACID Properties', 'Concurrency Control', 'Locks'],
-      resources: ['Transaction Management Notes', 'GATE PYQs'],
+      title: 'Building a Real-world Project',
+      topics: ['Structuring a complete codebase', 'Implementing key user stories', 'Error handling and deployment'],
+      resources: ['Full-stack Project Walkthrough', 'Deployment Checklist'],
       quiz: false,
       completed: false,
     },
     {
       day: 7,
-      title: 'Revision & Quiz',
-      topics: ['Review all concepts', 'Practice quiz', 'Weak areas revision'],
-      resources: ['DBMS Cheat Sheet', 'Final Practice Set'],
+      title: 'Revision & final Quiz',
+      topics: ['Review of all concepts', 'Addressing weaknesses', 'Final quiz evaluation'],
+      resources: [`Complete ${topic} Cheat Sheet`, 'Final Practice Set'],
       quiz: true,
       completed: false,
     },
@@ -80,7 +83,6 @@ const generateRoadmap = (topic: string): { topic: string; days: RoadmapDay[] } =
 
 const popularTopics = ['React', 'Python', 'DSA', 'Machine Learning', 'DBMS', 'System Design'];
 
-/* ─── Framer Motion variants ────────────────────────────────── */
 const containerVariants = {
   hidden: { opacity: 0 },
   visible: { opacity: 1, transition: { staggerChildren: 0.08 } },
@@ -92,46 +94,197 @@ const itemVariants = {
 };
 
 export default function RoadmapPage() {
+  const { user } = useAuthStore();
   const [view, setView] = useState<'input' | 'view'>('input');
   const [inputValue, setInputValue] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [roadmap, setRoadmap] = useState<ReturnType<typeof generateRoadmap> | null>(null);
+  const [roadmap, setRoadmap] = useState<{ id?: string; topic: string; days: RoadmapDay[] } | null>(null);
   const [checkedTopics, setCheckedTopics] = useState<Record<string, boolean>>({});
 
-  const handleGenerate = useCallback(async () => {
-    if (!inputValue.trim()) return;
-    setIsGenerating(true);
-    // Simulate AI generation delay
-    await new Promise((r) => setTimeout(r, 2000));
-    const data = generateRoadmap(inputValue.trim());
-    setRoadmap(data);
-    setIsGenerating(false);
-    setView('view');
-  }, [inputValue]);
-
-  const toggleTopic = (dayIndex: number, topicIndex: number) => {
-    const key = `${dayIndex}-${topicIndex}`;
-    setCheckedTopics((prev) => ({ ...prev, [key]: !prev[key] }));
+  // Clean raw markdown if Gemini returns JSON wrapped in backticks
+  const cleanJSONResponse = (raw: string): string => {
+    let clean = raw.trim();
+    if (clean.startsWith('```')) {
+      clean = clean.replace(/^```json/, '').replace(/^```/, '').replace(/```$/, '').trim();
+    }
+    return clean;
   };
 
-  // Calculate progress
-  const progress = roadmap
-    ? Math.round(
-        (roadmap.days.filter((d) => d.completed).length / roadmap.days.length) * 100
-      )
+  // Load user's latest roadmap if any exists on mount
+  useEffect(() => {
+    const fetchLatestRoadmap = async () => {
+      if (!user?.id) return;
+      try {
+        const { data, error } = await supabase
+          .from('roadmaps')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (error) throw error;
+        if (data && data.length > 0) {
+          const dbRoadmap = data[0];
+          setRoadmap({
+            id: dbRoadmap.id,
+            topic: dbRoadmap.topic,
+            days: dbRoadmap.data as RoadmapDay[],
+          });
+          
+          // Parse progress checkboxes
+          const progressMap: Record<string, boolean> = {};
+          if (Array.isArray(dbRoadmap.progress)) {
+            dbRoadmap.progress.forEach((key: string) => {
+              progressMap[key] = true;
+            });
+          }
+          setCheckedTopics(progressMap);
+          setView('view');
+        }
+      } catch (err: any) {
+        console.warn('Failed to load roadmap from Supabase, looking in localStorage:', err.message);
+        const localRoadmap = localStorage.getItem(`nexora_roadmap_${user.id}`);
+        if (localRoadmap) {
+          const parsed = JSON.parse(localRoadmap);
+          setRoadmap(parsed);
+          
+          const localProgress = localStorage.getItem(`nexora_roadmap_progress_${user.id}`);
+          if (localProgress) {
+            setCheckedTopics(JSON.parse(localProgress));
+          }
+          setView('view');
+        }
+      }
+    };
+
+    fetchLatestRoadmap();
+  }, [user?.id]);
+
+  const handleGenerate = useCallback(async () => {
+    if (!inputValue.trim() || !user?.id) return;
+    setIsGenerating(true);
+
+    const topic = inputValue.trim();
+    let parsedDays: RoadmapDay[] | null = null;
+    let newRoadmapId = crypto.randomUUID();
+
+    try {
+      // 1. Ask Gemini to generate the curriculum
+      const rawAIResponse = await generateAIRoadmap(topic);
+      const cleanJSON = cleanJSONResponse(rawAIResponse);
+      const data = JSON.parse(cleanJSON);
+      
+      if (Array.isArray(data) && data.length > 0) {
+        parsedDays = data.map((d, i) => ({
+          day: d.day || i + 1,
+          title: d.title || `Day ${d.day || i + 1}`,
+          topics: Array.isArray(d.topics) ? d.topics : ['Concepts Overview'],
+          resources: Array.isArray(d.resources) ? d.resources : ['Study Reference Material'],
+          quiz: !!d.quiz,
+          completed: false,
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to generate roadmap from Gemini API, using fallback generator:', err);
+    }
+
+    // 2. Fallback if JSON parsing or Gemini API failed
+    if (!parsedDays) {
+      parsedDays = getFallbackRoadmap(topic).days;
+    }
+
+    const newRoadmap = {
+      id: newRoadmapId,
+      topic,
+      days: parsedDays,
+    };
+
+    // 3. Save to database / local storage
+    try {
+      const { data: dbInsert, error } = await supabase
+        .from('roadmaps')
+        .insert([{
+          id: newRoadmapId,
+          user_id: user.id,
+          topic,
+          days: 7,
+          data: parsedDays,
+          progress: [],
+        }])
+        .select();
+
+      if (error) throw error;
+      if (dbInsert && dbInsert.length > 0) {
+        newRoadmap.id = dbInsert[0].id;
+      }
+    } catch (err: any) {
+      console.warn('Failed to persist roadmap to Supabase, saving locally:', err.message);
+    }
+
+    // Sync to local storage
+    localStorage.setItem(`nexora_roadmap_${user.id}`, JSON.stringify(newRoadmap));
+    localStorage.removeItem(`nexora_roadmap_progress_${user.id}`);
+    
+    setCheckedTopics({});
+    setRoadmap(newRoadmap);
+    setIsGenerating(false);
+    setView('view');
+  }, [inputValue, user?.id]);
+
+  const toggleTopic = async (dayIndex: number, topicIndex: number) => {
+    if (!roadmap || !user?.id) return;
+    const key = `${dayIndex}-${topicIndex}`;
+    const newChecked = { ...checkedTopics, [key]: !checkedTopics[key] };
+    setCheckedTopics(newChecked);
+
+    // Save progress mapping to DB / localStorage
+    const checkedKeysList = Object.keys(newChecked).filter(k => newChecked[k]);
+    
+    // Sync to local storage
+    localStorage.setItem(`nexora_roadmap_progress_${user.id}`, JSON.stringify(newChecked));
+
+    try {
+      if (roadmap.id) {
+        await supabase
+          .from('roadmaps')
+          .update({ progress: checkedKeysList })
+          .eq('id', roadmap.id);
+      }
+    } catch (err: any) {
+      console.warn('Failed to update checked topics in Supabase:', err.message);
+    }
+  };
+
+  // Calculate progress based on toggled subtopics
+  const totalSubtopics = roadmap?.days.reduce((acc, d) => acc + d.topics.length, 0) || 0;
+  const completedSubtopics = roadmap?.days.reduce((acc, d, dIdx) => {
+    return acc + d.topics.filter((_, tIdx) => checkedTopics[`${dIdx}-${tIdx}`]).length;
+  }, 0) || 0;
+
+  const progressPercent = totalSubtopics > 0 
+    ? Math.round((completedSubtopics / totalSubtopics) * 100) 
     : 0;
 
-  const getDayStatus = (day: RoadmapDay, index: number): 'completed' | 'current' | 'upcoming' => {
-    if (day.completed) return 'completed';
-    // First non-completed day is current
-    const firstIncompleteIndex = roadmap?.days.findIndex((d) => !d.completed) ?? -1;
-    if (index === firstIncompleteIndex) return 'current';
+  const getDayStatus = (dayIndex: number): 'completed' | 'current' | 'upcoming' => {
+    if (!roadmap) return 'upcoming';
+    const day = roadmap.days[dayIndex];
+    
+    // Day is completed if all of its subtopics are checked
+    const allTopicsChecked = day.topics.every((_, tIdx) => checkedTopics[`${dayIndex}-${tIdx}`]);
+    if (allTopicsChecked) return 'completed';
+
+    // Find the first day that is not fully completed
+    const firstIncompleteDayIndex = roadmap.days.findIndex((d, dIdx) => 
+      !d.topics.every((_, tIdx) => checkedTopics[`${dIdx}-${tIdx}`])
+    );
+    
+    if (dayIndex === firstIncompleteDayIndex) return 'current';
     return 'upcoming';
   };
 
   return (
     <DashboardLayout>
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl mx-auto p-4 md:p-6 lg:p-8">
         <AnimatePresence mode="wait">
           {/* ─── INPUT STATE ──────────────────────────────── */}
           {view === 'input' && (
@@ -157,7 +310,7 @@ export default function RoadmapPage() {
                 AI Roadmap Generator
               </h1>
               <p className="text-gray-400 text-center mb-10 text-lg">
-                Tell us what you want to learn
+                Tell us what you want to learn, and our AI will build a personalized syllabus
               </p>
 
               {/* Input */}
@@ -228,7 +381,7 @@ export default function RoadmapPage() {
                         />
                       ))}
                     </div>
-                    <p className="text-sm text-gray-500">Creating your personalized roadmap...</p>
+                    <p className="text-sm text-gray-500">Creating your personalized roadmap using Gemini...</p>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -256,20 +409,20 @@ export default function RoadmapPage() {
                   <h1 className="text-2xl md:text-3xl font-bold text-white">
                     {roadmap.topic}
                   </h1>
-                  <p className="text-gray-400 text-sm mt-1">7-day learning plan</p>
+                  <p className="text-gray-400 text-sm mt-1">{roadmap.days.length}-day customized plan</p>
                 </div>
               </div>
 
               {/* Progress bar */}
               <div className="card-premium p-5 rounded-2xl mb-8">
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-medium text-gray-300">Overall Progress</span>
-                  <span className="text-sm font-bold gradient-text">{progress}%</span>
+                  <span className="text-sm font-medium text-gray-300">Topic Progress</span>
+                  <span className="text-sm font-bold gradient-text">{progressPercent}%</span>
                 </div>
                 <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden">
                   <motion.div
                     initial={{ width: 0 }}
-                    animate={{ width: `${progress}%` }}
+                    animate={{ width: `${progressPercent}%` }}
                     transition={{ duration: 1, ease: 'easeOut' }}
                     className="h-full rounded-full gradient-primary"
                   />
@@ -277,11 +430,7 @@ export default function RoadmapPage() {
                 <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
                   <span className="flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                    {roadmap.days.filter((d) => d.completed).length} completed
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                    {roadmap.days.filter((d) => !d.completed).length} remaining
+                    {completedSubtopics} of {totalSubtopics} items completed
                   </span>
                 </div>
               </div>
@@ -297,7 +446,9 @@ export default function RoadmapPage() {
                 <div className="absolute left-6 md:left-8 top-0 bottom-0 w-0.5 bg-gradient-to-b from-indigo-500 via-purple-500 to-indigo-500/20" />
 
                 {roadmap.days.map((day, index) => {
-                  const status = getDayStatus(day, index);
+                  const status = getDayStatus(index);
+                  const allChecked = day.topics.every((_, tIdx) => checkedTopics[`${index}-${tIdx}`]);
+                  
                   return (
                     <motion.div
                       key={day.day}
@@ -362,7 +513,7 @@ export default function RoadmapPage() {
                         {/* Topics */}
                         <div className="space-y-2 mb-4">
                           {day.topics.map((topic, tIdx) => {
-                            const isChecked = checkedTopics[`${index}-${tIdx}`] || day.completed;
+                            const isChecked = !!checkedTopics[`${index}-${tIdx}`];
                             return (
                               <button
                                 key={tIdx}
@@ -389,23 +540,25 @@ export default function RoadmapPage() {
                         </div>
 
                         {/* Resources */}
-                        <div className="pt-3 border-t border-white/5">
-                          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                            Resources
-                          </h4>
-                          <div className="flex flex-wrap gap-2">
-                            {day.resources.map((resource, rIdx) => (
-                              <span
-                                key={rIdx}
-                                className="flex items-center gap-1.5 text-xs text-gray-400 bg-white/5 px-3 py-1.5 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
-                              >
-                                <BookOpen className="w-3 h-3" />
-                                {resource}
-                                <ChevronRight className="w-3 h-3" />
-                              </span>
-                            ))}
+                        {day.resources && day.resources.length > 0 && (
+                          <div className="pt-3 border-t border-white/5">
+                            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                              Resources
+                            </h4>
+                            <div className="flex flex-wrap gap-2">
+                              {day.resources.map((resource, rIdx) => (
+                                <span
+                                  key={rIdx}
+                                  className="flex items-center gap-1.5 text-xs text-gray-400 bg-white/5 px-3 py-1.5 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+                                >
+                                  <BookOpen className="w-3.5 h-3.5" />
+                                  {resource}
+                                  <ChevronRight className="w-3 h-3" />
+                                </span>
+                              ))}
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
                     </motion.div>
                   );

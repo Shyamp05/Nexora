@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Search, MessageSquare } from 'lucide-react';
+import { Plus, Search, MessageSquare, Trash2 } from 'lucide-react';
 import { useChatStore } from '@/stores/chatStore';
+import { useAuthStore } from '@/stores/authStore';
 
 // ============================================
 // ChatSidebar — lists past conversations,
@@ -26,14 +27,24 @@ interface ChatSidebarProps {
 }
 
 export default function ChatSidebar({ onClose }: ChatSidebarProps) {
+  const { user } = useAuthStore();
   const {
     conversations,
     activeConversation,
     setActiveConversation,
     createNewConversation,
+    loadConversations,
+    deleteConversation,
   } = useChatStore();
 
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Load conversations on mount
+  useEffect(() => {
+    if (user?.id) {
+      loadConversations(user.id);
+    }
+  }, [user?.id, loadConversations]);
 
   // Filter & group conversations
   const grouped = useMemo(() => {
@@ -55,14 +66,24 @@ export default function ChatSidebar({ onClose }: ChatSidebarProps) {
       .map((g) => ({ label: g, items: groups[g] }));
   }, [conversations, searchQuery]);
 
+  const handleDelete = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (user?.id) {
+      deleteConversation(id, user.id);
+    }
+  };
+
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-[#0a0a0f]">
       {/* New Chat Button */}
       <div className="p-4">
         <motion.button
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
-          onClick={createNewConversation}
+          onClick={() => {
+            createNewConversation();
+            if (onClose) onClose();
+          }}
           className="w-full flex items-center justify-center gap-2 py-3 rounded-xl gradient-primary text-white font-semibold text-sm shadow-lg shadow-indigo-500/20 hover:shadow-indigo-500/30 transition-shadow"
         >
           <Plus size={18} />
@@ -96,30 +117,42 @@ export default function ChatSidebar({ onClose }: ChatSidebarProps) {
                 {group.items.map((conv) => {
                   const isActive = activeConversation?.id === conv.id;
                   return (
-                    <motion.button
+                    <motion.div
                       key={conv.id}
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: -10 }}
                       whileHover={{ x: 4 }}
-                      onClick={() => setActiveConversation(conv)}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200 ${
+                      onClick={async () => {
+                        await setActiveConversation(conv);
+                        if (onClose) onClose();
+                      }}
+                      className={`group w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200 cursor-pointer ${
                         isActive
                           ? 'bg-indigo-500/10 border border-indigo-500/20 text-white'
                           : 'text-gray-400 hover:bg-white/5 hover:text-white border border-transparent'
                       }`}
                     >
-                      <MessageSquare
-                        size={16}
-                        className={`flex-shrink-0 ${isActive ? 'text-indigo-400' : 'text-gray-600'}`}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm truncate">{conv.title}</p>
-                        <p className="text-[10px] text-gray-500 mt-0.5">
-                          {new Date(conv.updated_at).toLocaleDateString()}
-                        </p>
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <MessageSquare
+                          size={16}
+                          className={`flex-shrink-0 ${isActive ? 'text-indigo-400' : 'text-gray-600'}`}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm truncate">{conv.title}</p>
+                          <p className="text-[10px] text-gray-500 mt-0.5">
+                            {new Date(conv.updated_at).toLocaleDateString()}
+                          </p>
+                        </div>
                       </div>
-                    </motion.button>
+                      <button
+                        onClick={(e) => handleDelete(e, conv.id)}
+                        className="opacity-0 group-hover:opacity-100 p-1 rounded-md hover:bg-white/10 text-gray-500 hover:text-red-400 transition-all flex-shrink-0"
+                        title="Delete conversation"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </motion.div>
                   );
                 })}
               </div>

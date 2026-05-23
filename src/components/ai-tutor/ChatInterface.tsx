@@ -11,6 +11,7 @@ import {
   Bot,
 } from 'lucide-react';
 import { useChatStore } from '@/stores/chatStore';
+import { useAuthStore } from '@/stores/authStore';
 import MessageBubble from './MessageBubble';
 
 // ============================================
@@ -43,6 +44,7 @@ const suggestions = [
 // ============================================
 
 export default function ChatInterface() {
+  const { user } = useAuthStore();
   const { messages, mode, setMode, sendMessage, isStreaming } = useChatStore();
   const [inputValue, setInputValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -62,10 +64,10 @@ export default function ChatInterface() {
   }, [inputValue]);
 
   const handleSend = async () => {
-    if (!inputValue.trim() || isStreaming) return;
+    if (!inputValue.trim() || isStreaming || !user?.id) return;
     const value = inputValue.trim();
     setInputValue('');
-    await sendMessage(value);
+    await sendMessage(value, user.id);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -76,8 +78,8 @@ export default function ChatInterface() {
   };
 
   const handleSuggestionClick = (text: string) => {
-    setInputValue(text);
-    sendMessage(text);
+    if (!user?.id) return;
+    sendMessage(text, user.id);
   };
 
   const hasMessages = messages.length > 0;

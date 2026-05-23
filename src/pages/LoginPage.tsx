@@ -25,8 +25,8 @@ const LoginPage = () => {
     try {
       await login(email, password);
       navigate('/dashboard');
-    } catch {
-      setError('Invalid credentials. Please try again.');
+    } catch (err: any) {
+      setError(err?.message || 'Invalid credentials. Please try again.');
     }
   };
 

@@ -5,6 +5,8 @@ import {
   Timer, Play, Pause, RotateCcw, Coffee, Plus, Trash2,
   CheckCircle2, Circle, GripVertical, Target
 } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/stores/authStore';
 
 interface Task {
   id: string;
@@ -33,7 +35,10 @@ const priorityLabels = {
   low: 'Low',
 };
 
+let isFallbackMode = false;
+
 export default function ProductivityPage() {
+  const { user } = useAuthStore();
   const [workMinutes, setWorkMinutes] = useState(25);
   const [breakMinutes, setBreakMinutes] = useState(5);
   const [timeLeft, setTimeLeft] = useState(workMinutes * 60);
@@ -42,9 +47,39 @@ export default function ProductivityPage() {
   const [sessionsCompleted, setSessionsCompleted] = useState(2);
   const totalSessions = 4;
 
-  const [tasks, setTasks] = useState<Task[]>(defaultTasks);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [newTask, setNewTask] = useState('');
   const [newPriority, setNewPriority] = useState<'high' | 'medium' | 'low'>('medium');
+
+  // Load tasks on mount
+  useEffect(() => {
+    const loadTasks = async () => {
+      if (!user?.id) return;
+      try {
+        const { data, error } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: true });
+
+        if (error) throw error;
+        isFallbackMode = false;
+        setTasks(data as Task[]);
+      } catch (err: any) {
+        console.warn('Failed to fetch tasks from Supabase, loading from localStorage:', err.message);
+        isFallbackMode = true;
+        const localTasks = localStorage.getItem(`nexora_tasks_${user.id}`);
+        if (localTasks) {
+          setTasks(JSON.parse(localTasks));
+        } else {
+          setTasks(defaultTasks);
+          localStorage.setItem(`nexora_tasks_${user.id}`, JSON.stringify(defaultTasks));
+        }
+      }
+    };
+
+    loadTasks();
+  }, [user?.id]);
 
   // Timer logic
   useEffect(() => {
@@ -81,19 +116,82 @@ export default function ProductivityPage() {
     setTimeLeft(workMinutes * 60);
   }, [workMinutes]);
 
-  const addTask = () => {
-    if (!newTask.trim()) return;
-    setTasks((t) => [...t, { id: Date.now().toString(), title: newTask, priority: newPriority, completed: false }]);
+  const addTask = async () => {
+    if (!newTask.trim() || !user?.id) return;
+    const taskUuid = crypto.randomUUID();
+    const taskItem: Task = {
+      id: taskUuid,
+      title: newTask.trim(),
+      priority: newPriority,
+      completed: false,
+    };
+
+    const updatedTasks = [...tasks, taskItem];
+    setTasks(updatedTasks);
     setNewTask('');
+    localStorage.setItem(`nexora_tasks_${user.id}`, JSON.stringify(updatedTasks));
+
+    if (!isFallbackMode) {
+      try {
+        await supabase
+          .from('tasks')
+          .insert([{
+            id: taskUuid,
+            user_id: user.id,
+            title: taskItem.title,
+            priority: taskItem.priority,
+            completed: false,
+          }]);
+      } catch (err: any) {
+        console.warn('Failed to insert task to Supabase:', err.message);
+      }
+    }
   };
 
-  const toggleTask = (id: string) => {
-    setTasks((t) => t.map((task) => task.id === id ? { ...task, completed: !task.completed } : task));
+  const toggleTask = async (id: string) => {
+    if (!user?.id) return;
+    const taskToToggle = tasks.find(t => t.id === id);
+    if (!taskToToggle) return;
+
+    const newCompletedVal = !taskToToggle.completed;
+    const updatedTasks = tasks.map((task) => 
+      task.id === id ? { ...task, completed: newCompletedVal } : task
+    );
+    setTasks(updatedTasks);
+    localStorage.setItem(`nexora_tasks_${user.id}`, JSON.stringify(updatedTasks));
+
+    if (!isFallbackMode) {
+      try {
+        await supabase
+          .from('tasks')
+          .update({ completed: newCompletedVal })
+          .eq('id', id);
+      } catch (err: any) {
+        console.warn('Failed to update task completion in Supabase:', err.message);
+      }
+    }
   };
 
-  const deleteTask = (id: string) => {
-    setTasks((t) => t.filter((task) => task.id !== id));
+  const deleteTask = async (id: string) => {
+    if (!user?.id) return;
+    const updatedTasks = tasks.filter((task) => task.id !== id);
+    setTasks(updatedTasks);
+    localStorage.setItem(`nexora_tasks_${user.id}`, JSON.stringify(updatedTasks));
+
+    if (!isFallbackMode) {
+      try {
+        await supabase
+          .from('tasks')
+          .delete()
+          .eq('id', id);
+      } catch (err: any) {
+        console.warn('Failed to delete task in Supabase:', err.message);
+      }
+    }
   };
+
+  const completedCount = tasks.filter((t) => t.completed).length;
+  const completionPercentage = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
 
   return (
     <DashboardLayout>
@@ -194,7 +292,7 @@ export default function ProductivityPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs text-gray-500 mb-1 block">Work (min)</label>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap gap-2">
                   {[15, 25, 30, 45].map((m) => (
                     <button
                       key={m}
@@ -210,7 +308,7 @@ export default function ProductivityPage() {
               </div>
               <div>
                 <label className="text-xs text-gray-500 mb-1 block">Break (min)</label>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap gap-2">
                   {[3, 5, 10, 15].map((m) => (
                     <button
                       key={m}
@@ -240,7 +338,7 @@ export default function ProductivityPage() {
                 Today's Tasks
               </h3>
               <span className="text-xs text-gray-500">
-                {tasks.filter((t) => t.completed).length}/{tasks.length} done
+                {completedCount}/{tasks.length} done
               </span>
             </div>
 
@@ -276,7 +374,7 @@ export default function ProductivityPage() {
             {/* Task List */}
             <div className="space-y-2 max-h-[500px] overflow-y-auto no-scrollbar">
               <AnimatePresence>
-                {tasks.sort((a, b) => Number(a.completed) - Number(b.completed)).map((task) => (
+                {tasks.slice().sort((a, b) => Number(a.completed) - Number(b.completed)).map((task) => (
                   <motion.div
                     key={task.id}
                     layout
@@ -318,11 +416,11 @@ export default function ProductivityPage() {
                   <p className="text-[10px] text-gray-500">Minutes Focused</p>
                 </div>
                 <div>
-                  <p className="text-lg font-bold text-white">{tasks.filter(t => t.completed).length}</p>
+                  <p className="text-lg font-bold text-white">{completedCount}</p>
                   <p className="text-[10px] text-gray-500">Tasks Done</p>
                 </div>
                 <div>
-                  <p className="text-lg font-bold text-white">{Math.round((tasks.filter(t => t.completed).length / tasks.length) * 100)}%</p>
+                  <p className="text-lg font-bold text-white">{completionPercentage}%</p>
                   <p className="text-[10px] text-gray-500">Completion</p>
                 </div>
               </div>
