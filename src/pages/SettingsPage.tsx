@@ -13,7 +13,7 @@ export default function SettingsPage() {
   const navigate = useNavigate();
   const [name, setName] = useState(user?.full_name || '');
   const [email, setEmail] = useState(user?.email || '');
-  const [language, setLanguage] = useState(user?.preferred_language || 'en');
+  const [language, setLanguage] = useState<'en' | 'hi' | 'gu'>(user?.preferred_language || 'en');
   const [studyGoal, setStudyGoal] = useState((user?.study_goal_minutes || 120) / 60);
   const [notifications, setNotifications] = useState(true);
   const [tts, setTts] = useState(false);
@@ -120,26 +120,26 @@ export default function SettingsPage() {
           <div className="space-y-5">
             <div>
               <label className="text-sm text-gray-400 mb-2 block">Language</label>
-              <div className="flex gap-3">
-                {[
-                  { code: 'en', label: 'English', flag: '🇬🇧' },
-                  { code: 'hi', label: 'हिंदी', flag: '🇮🇳' },
-                  { code: 'gu', label: 'ગુજરાતી', flag: '🇮🇳' },
-                ].map((lang) => (
-                  <button
-                    key={lang.code}
-                    onClick={() => setLanguage(lang.code)}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                      language === lang.code
-                        ? 'gradient-primary text-white shadow-lg shadow-indigo-500/20'
-                        : 'bg-white/5 text-gray-400 hover:bg-white/10'
-                    }`}
-                  >
-                    <span>{lang.flag}</span>
-                    {lang.label}
-                  </button>
-                ))}
-              </div>
+            <div className="flex gap-3">
+              {([
+                { code: 'en', label: 'English', flag: '🇬🇧' },
+                { code: 'hi', label: 'हिंदी', flag: '🇮🇳' },
+                { code: 'gu', label: 'ગુજરાતી', flag: '🇮🇳' },
+              ] as const).map((lang) => (
+                <button
+                  key={lang.code}
+                  onClick={() => setLanguage(lang.code)}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    language === lang.code
+                      ? 'gradient-primary text-white shadow-lg shadow-indigo-500/20'
+                      : 'bg-white/5 text-gray-400 hover:bg-white/10'
+                  }`}
+                >
+                  <span>{lang.flag}</span>
+                  {lang.label}
+                </button>
+              ))}
+            </div>
             </div>
 
             <div>

@@ -213,11 +213,14 @@ export default function AnalyticsPage() {
                     tickLine={false}
                     axisLine={false}
                     interval={0}
-                    tick={({ x, y, payload }: { x: number; y: number; payload: { value: string } }) => (
-                      <text x={x} y={y + 12} textAnchor="middle" fill="#6b6b80" fontSize={10}>
-                        {payload.value.length > 8 ? payload.value.slice(0, 8) + '…' : payload.value}
-                      </text>
-                    )}
+                    tick={(props: any) => {
+                      const { x, y, payload } = props;
+                      return (
+                        <text x={x} y={y + 12} textAnchor="middle" fill="#6b6b80" fontSize={10}>
+                          {payload.value.length > 8 ? payload.value.slice(0, 8) + '…' : payload.value}
+                        </text>
+                      );
+                    }}
                   />
                   <YAxis stroke="#6b6b80" fontSize={12} tickLine={false} axisLine={false} domain={[0, 100]} />
                   <Tooltip content={<CustomTooltip />} />
